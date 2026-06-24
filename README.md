@@ -40,14 +40,6 @@ docker compose down
 
 Multi-stage Dockerfile собирает приложение внутри контейнера (Node 20-alpine), затем раздаёт статику через nginx — итоговый образ ~50 MB.
 
-### Изменить порт
-
-Поправьте в `docker-compose.yml`:
-
-```yaml
-ports:
-  - "3000:80"   # хост:контейнер
-```
 
 ## Запуск локально (без Docker)
 
