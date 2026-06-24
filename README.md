@@ -1,5 +1,25 @@
-# Aurora
+<div align="center">
+  <table>
+    <tr>
+      <td align="center">
+        <img src="https://github.com/user-attachments/assets/8bee6116-0044-4c2a-9ff3-4749ee67ed0f" alt="Скриншот 1" width="500"/>
+      </td>
+      <td align="center">
+        <img src="https://github.com/user-attachments/assets/6cbada18-adb9-4c7a-a227-5e0caa182f75" alt="Скриншот 2" width="500"/>
+      </td>
+    </tr>
+    <tr>
+      <td align="center">
+        <img src="https://github.com/user-attachments/assets/4123a340-3d51-439a-aafa-f8814c077d0b" alt="Скриншот 3" width="500"/>
+      </td>
+      <td align="center">
+        <img src="https://github.com/user-attachments/assets/bed4a174-67e3-4448-96ce-5fe8abeeb744" alt="Скриншот 4" width="200"/>
+      </td>
+    </tr>
+  </table>
+</div>
 
+# Aurora
 Локальный медиаплеер с интерфейсом Liquid Glass, объединяющий музыку, радио, IPTV и аудиокниги.
 
 - **Моя музыка** — локальная библиотека (треки + плейлисты)
