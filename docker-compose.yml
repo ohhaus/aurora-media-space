@@ -1,0 +1,8 @@
+services:
+  player:
+    build: .
+    image: player:latest
+    container_name: player
+    ports:
+      - "8080:80"
+    restart: unless-stopped
