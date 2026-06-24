@@ -1,10 +1,14 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import mpegts from 'mpegts.js';
-import type { Channel } from '../../../lib/indexedDb';
 
 export type VideoPlayerHandle = {
   toggleFullscreen: () => void;
+};
+
+export type VideoSource = {
+  url: string;
+  isLive?: boolean;
 };
 
 type Engine = 'hls' | 'mpegts' | 'native';
@@ -15,11 +19,16 @@ function pickEngine(url: string): Engine {
   return 'native';
 }
 
+type Props = { source: VideoSource } | { channel: { url: string } };
+
 /** Pure media player: just the <video> + engine wiring. No chrome. */
-const VideoPlayer = forwardRef<VideoPlayerHandle, { channel: Channel }>(function VideoPlayer(
-  { channel },
+const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
+  props,
   ref,
 ) {
+  const source: VideoSource =
+    'source' in props ? props.source : { url: props.channel.url };
+  const { url, isLive } = source;
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const hideTimerRef = useRef<number | null>(null);
@@ -51,7 +60,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, { channel: Channel }>(function
     const video = videoRef.current;
     if (!video) return;
     setErr(null);
-    const engine = pickEngine(channel.url);
+    const engine = pickEngine(url);
 
     let hls: Hls | null = null;
     let ts: ReturnType<typeof mpegts.createPlayer> | null = null;
@@ -59,19 +68,19 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, { channel: Channel }>(function
     if (engine === 'hls') {
       if (Hls.isSupported()) {
         hls = new Hls({ enableWorker: true });
-        hls.loadSource(channel.url);
+        hls.loadSource(url);
         hls.attachMedia(video);
         hls.on(Hls.Events.ERROR, (_, data) => {
           if (data.fatal) setErr(`HLS: ${data.details}`);
         });
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = channel.url;
+        video.src = url;
       } else {
         setErr('HLS не поддерживается этим браузером');
       }
     } else if (engine === 'mpegts') {
       if (mpegts.getFeatureList().mseLivePlayback) {
-        ts = mpegts.createPlayer({ type: 'mpegts', url: channel.url, isLive: true });
+        ts = mpegts.createPlayer({ type: 'mpegts', url, isLive: isLive ?? true });
         ts.attachMediaElement(video);
         ts.load();
         Promise.resolve(ts.play()).catch(() => {});
@@ -79,7 +88,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, { channel: Channel }>(function
         setErr('MPEG-TS не поддерживается этим браузером');
       }
     } else {
-      video.src = channel.url;
+      video.src = url;
     }
 
     video.play().catch(() => {});
@@ -91,7 +100,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, { channel: Channel }>(function
       video.removeAttribute('src');
       video.load();
     };
-  }, [channel.url]);
+  }, [url, isLive]);
 
   useEffect(() => {
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);

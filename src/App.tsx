@@ -4,13 +4,14 @@ import PlayerBar from './components/PlayerBar';
 import MusicLibrary from './components/modes/MusicLibrary';
 import Radio from './components/modes/Radio';
 import IPTV from './components/modes/IPTV';
+import Videos from './components/modes/Videos';
 import Audiobooks from './components/modes/Audiobooks';
 import Guide from './components/modes/Guide';
 import Storage from './components/modes/Storage';
 
 export default function App() {
   const [mode, setMode] = useState<Mode>('music');
-  const hidePlayer = mode === 'iptv' || mode === 'audiobooks';
+  const hidePlayer = mode === 'iptv' || mode === 'videos' || mode === 'audiobooks';
 
   return (
     <div className="app-root h-screen flex flex-col text-white bg-mesh overflow-hidden">
@@ -27,6 +28,11 @@ export default function App() {
           <div className={mode === 'iptv' ? 'h-full' : 'hidden'}>
             <IPTV />
           </div>
+          {mode === 'videos' && (
+            <div className="h-full">
+              <Videos />
+            </div>
+          )}
           <div className={mode === 'audiobooks' ? 'h-full' : 'hidden'}>
             <Audiobooks />
           </div>

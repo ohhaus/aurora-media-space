@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseBlob } from 'music-metadata';
 import JSZip from 'jszip';
 import { usePlayer, type Track } from '../../../store/playerStore';
 import EqualizerAnimation from '../../EqualizerAnimation';
+import ConfirmDialog from '../../ConfirmDialog';
 import {
   isAudioFilename,
+  isMacOsMetadataPath,
   supportsFileSystemAccess,
   ensurePermission,
   walkAudio,
@@ -29,7 +31,11 @@ type LibTrack = Track & {
   search: string;
   /** Top-level subfolder name (used to build auto-playlists). null = root. */
   topFolder: string | null;
+  addedAt: number;
 };
+
+type SortKey = 'recent' | 'name-asc' | 'name-desc' | 'artist';
+type ViewMode = 'grid' | 'list';
 
 function basename(path: string) {
   return path.split('/').pop() ?? path;
@@ -39,14 +45,16 @@ async function metaFromFile(
   file: File,
   id: string,
   topFolder: string | null,
+  addedAt: number,
   resolveSrc: () => Promise<string>,
+  options: { skipCovers?: boolean } = {},
 ): Promise<LibTrack> {
   let title = file.name.replace(/\.[^.]+$/, '');
   let artist: string | undefined;
   let album: string | undefined;
   let artwork: string | undefined;
   try {
-    const m = await parseBlob(file, { duration: false, skipCovers: false });
+    const m = await parseBlob(file, { duration: false, skipCovers: options.skipCovers ?? false });
     title = m.common.title || title;
     artist = m.common.artist;
     album = m.common.album;
@@ -66,11 +74,17 @@ async function metaFromFile(
     artwork,
     resolveSrc,
     topFolder,
+    addedAt,
     search: `${title} ${artist ?? ''} ${album ?? ''}`.toLowerCase(),
   };
 }
 
 type View = { kind: 'tracks' } | { kind: 'playlists' } | { kind: 'playlist'; id: string; auto: boolean };
+
+type PendingDelete =
+  | { kind: 'track'; track: LibTrack }
+  | { kind: 'playlist'; id: string; name: string }
+  | { kind: 'zip'; id: string; name: string };
 
 export default function MusicLibrary() {
   const [tracks, setTracks] = useState<LibTrack[]>([]);
@@ -82,8 +96,12 @@ export default function MusicLibrary() {
   const [pickForTrack, setPickForTrack] = useState<LibTrack | null>(null);
   const [creatingPlaylist, setCreatingPlaylist] = useState<{ onCreated?: (p: MusicPlaylist) => void } | null>(null);
   const [addToPlaylistId, setAddToPlaylistId] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortKey>('recent');
+  const [viewMode, setViewMode] = useState<ViewMode>('grid');
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
 
   const { current, isPlaying, playMusic, removeTrack: removeTrackFromPlayer } = usePlayer();
+  const artworkUrlsRef = useRef<string[]>([]);
 
   useEffect(() => {
     (async () => {
@@ -103,6 +121,10 @@ export default function MusicLibrary() {
 
   async function rebuildAll() {
     setLoading(true);
+    // Revoke previous artwork object URLs to release memory.
+    for (const url of artworkUrlsRef.current) URL.revokeObjectURL(url);
+    artworkUrlsRef.current = [];
+
     const dir = await loadDirHandle();
     const handles = await loadFileHandles();
     const zipList = await loadMusicZips();
@@ -112,7 +134,6 @@ export default function MusicLibrary() {
     if (dir) {
       const ts = await collectFromDir(dir);
       if (ts === null) {
-        // permission denied — forget the handle
         await clearDirHandle();
       } else {
         all.push(...ts);
@@ -122,9 +143,18 @@ export default function MusicLibrary() {
     for (const z of zipList) all.push(...(await collectFromZip(z)));
 
     const hidden = new Set(await loadHiddenMusicTracks());
-    setTracks(all.filter((track) => !hidden.has(track.id)));
+    const next = all.filter((track) => !hidden.has(track.id));
+    artworkUrlsRef.current = next.map((t) => t.artwork).filter((u): u is string => !!u);
+    setTracks(next);
     setLoading(false);
   }
+
+  useEffect(() => {
+    return () => {
+      for (const url of artworkUrlsRef.current) URL.revokeObjectURL(url);
+      artworkUrlsRef.current = [];
+    };
+  }, []);
 
   async function collectFromDir(dir: FileSystemDirectoryHandle): Promise<LibTrack[] | null> {
     if (!(await ensurePermission(dir, 'read'))) return null;
@@ -134,10 +164,12 @@ export default function MusicLibrary() {
       const topFolder = slash >= 0 ? path.slice(0, slash) : null;
       const id = `dir:${path}`;
       const fh = handle;
+      const file = await fh.getFile();
       const t = await metaFromFile(
-        await fh.getFile(),
+        file,
         id,
         topFolder,
+        file.lastModified || Date.now(),
         async () => {
           await ensurePermission(dir, 'read');
           return URL.createObjectURL(await fh.getFile());
@@ -155,7 +187,7 @@ export default function MusicLibrary() {
       const file = await fh.getFile();
       if (!isAudioFilename(file.name)) continue;
       const id = `fh:${file.name}`;
-      const t = await metaFromFile(file, id, null, async () => {
+      const t = await metaFromFile(file, id, null, file.lastModified || Date.now(), async () => {
         await ensurePermission(fh, 'read');
         return URL.createObjectURL(await fh.getFile());
       });
@@ -168,7 +200,12 @@ export default function MusicLibrary() {
     try {
       const zip = await JSZip.loadAsync(stored.blob);
       const entries = Object.values(zip.files)
-        .filter((e) => !e.dir && isAudioFilename(basename(e.name)))
+        .filter(
+          (e) =>
+            !e.dir &&
+            !isMacOsMetadataPath(e.name) &&
+            isAudioFilename(basename(e.name)),
+        )
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
       const archiveName = stored.fileName.replace(/\.zip$/i, '');
@@ -183,7 +220,7 @@ export default function MusicLibrary() {
           if (!cachedUrl) cachedUrl = URL.createObjectURL(blob);
           return cachedUrl;
         };
-        const t = await metaFromFile(file, id, archiveName, resolveSrc);
+        const t = await metaFromFile(file, id, archiveName, stored.addedAt, resolveSrc);
         out.push(t);
       }
       return out;
@@ -238,10 +275,9 @@ export default function MusicLibrary() {
         if (!isAudioFilename(file.name)) continue;
         const url = URL.createObjectURL(file);
         const id = `file:${file.name}`;
-        const t = await metaFromFile(file, id, null, async () => url);
+        const t = await metaFromFile(file, id, null, file.lastModified || Date.now(), async () => url);
         collected.push(t);
       }
-      // Session-only files coexist with persistent sources for this session.
       setTracks((prev) => [...prev.filter((t) => !t.id.startsWith('file:')), ...collected]);
       setLoading(false);
     };
@@ -260,90 +296,27 @@ export default function MusicLibrary() {
     await rebuildAll();
   }
 
-  async function removeZip(id: string) {
-    if (!confirm('Удалить плейлист из ZIP?')) return;
-    const next = zips.filter((z) => z.id !== id);
-    await saveMusicZips(next);
-    await rebuildAll();
-  }
+  async function confirmPending() {
+    if (!pendingDelete) return;
+    const pd = pendingDelete;
+    setPendingDelete(null);
 
-  // Map: archive-name (without .zip) → zip id, for marking auto-playlists as ZIP-sourced.
-  const zipNameToId = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const z of zips) m.set(z.fileName.replace(/\.zip$/i, ''), z.id);
-    return m;
-  }, [zips]);
-
-  // Auto-playlists: groups by top-level subfolder (or zip archive name).
-  const autoPlaylists = useMemo(() => {
-    const map = new Map<string, LibTrack[]>();
-    for (const t of tracks) {
-      if (!t.topFolder) continue;
-      if (!map.has(t.topFolder)) map.set(t.topFolder, []);
-      map.get(t.topFolder)!.push(t);
-    }
-    return Array.from(map.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, tracks]) => ({
-        id: `auto:${name}`,
-        name,
-        tracks,
-        zipId: zipNameToId.get(name),
-      }));
-  }, [tracks, zipNameToId]);
-
-  const filteredTracks = useMemo(() => {
-    if (!query.trim()) return tracks;
-    const q = query.toLowerCase();
-    return tracks.filter((t) => t.search.includes(q));
-  }, [tracks, query]);
-
-  async function createPlaylistWithName(name: string): Promise<MusicPlaylist> {
-    const p: MusicPlaylist = { id: `m:${Date.now()}`, name, trackIds: [] };
-    const next = [...manual, p];
-    setManual(next);
-    await saveMusicPlaylists(next);
-    return p;
-  }
-
-  async function addTracksToPlaylist(plId: string, trackIds: string[]) {
-    const next = manual.map((p) => {
-      if (p.id !== plId) return p;
-      const set = new Set(p.trackIds);
-      for (const id of trackIds) set.add(id);
-      return { ...p, trackIds: Array.from(set) };
-    });
-    setManual(next);
-    await saveMusicPlaylists(next);
-  }
-
-  async function addTrackToPlaylist(plId: string, track: LibTrack) {
-    const next = manual.map((p) =>
-      p.id === plId && !p.trackIds.includes(track.id) ? { ...p, trackIds: [...p.trackIds, track.id] } : p,
-    );
-    setManual(next);
-    await saveMusicPlaylists(next);
-  }
-
-  async function removeManualPlaylist(plId: string) {
-    if (!confirm('Удалить плейлист?')) return;
-    const next = manual.filter((p) => p.id !== plId);
-    setManual(next);
-    await saveMusicPlaylists(next);
-  }
-
-  async function removeTrackFromPlaylist(plId: string, trackId: string) {
-    const next = manual.map((p) =>
-      p.id === plId ? { ...p, trackIds: p.trackIds.filter((id) => id !== trackId) } : p,
-    );
-    setManual(next);
-    await saveMusicPlaylists(next);
-  }
-
-  async function removeTrackFromLibrary(track: LibTrack) {
-    if (!confirm(`Убрать «${track.title}» из библиотеки Aurora? Исходный файл останется на диске.`)) {
+    if (pd.kind === 'zip') {
+      const next = zips.filter((z) => z.id !== pd.id);
+      await saveMusicZips(next);
+      await rebuildAll();
       return;
     }
+
+    if (pd.kind === 'playlist') {
+      const next = manual.filter((p) => p.id !== pd.id);
+      setManual(next);
+      await saveMusicPlaylists(next);
+      return;
+    }
+
+    // pd.kind === 'track'
+    const track = pd.track;
     if (track.id.startsWith('file:')) {
       setTracks((prev) => prev.filter((item) => item.id !== track.id));
     } else if (track.id.startsWith('fh:')) {
@@ -364,7 +337,85 @@ export default function MusicLibrary() {
     removeTrackFromPlayer(track.id);
   }
 
-  // Resolved tracks of a manual playlist (skip missing ids).
+  const zipNameToId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const z of zips) m.set(z.fileName.replace(/\.zip$/i, ''), z.id);
+    return m;
+  }, [zips]);
+
+  const autoPlaylists = useMemo(() => {
+    const map = new Map<string, LibTrack[]>();
+    for (const t of tracks) {
+      if (!t.topFolder) continue;
+      if (!map.has(t.topFolder)) map.set(t.topFolder, []);
+      map.get(t.topFolder)!.push(t);
+    }
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, ts]) => ({
+        id: `auto:${name}`,
+        name,
+        tracks: ts,
+        zipId: zipNameToId.get(name),
+      }));
+  }, [tracks, zipNameToId]);
+
+  function sortTracks(list: LibTrack[]): LibTrack[] {
+    const arr = [...list];
+    switch (sort) {
+      case 'recent':
+        arr.sort((a, b) => b.addedAt - a.addedAt);
+        break;
+      case 'name-asc':
+        arr.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' }));
+        break;
+      case 'name-desc':
+        arr.sort((a, b) => b.title.localeCompare(a.title, undefined, { numeric: true, sensitivity: 'base' }));
+        break;
+      case 'artist':
+        arr.sort((a, b) => {
+          const ar = (a.artist ?? '').localeCompare(b.artist ?? '', undefined, { sensitivity: 'base' });
+          if (ar !== 0) return ar;
+          return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' });
+        });
+        break;
+    }
+    return arr;
+  }
+
+  const filteredTracks = useMemo(() => {
+    const base = !query.trim() ? tracks : tracks.filter((t) => t.search.includes(query.toLowerCase()));
+    return sortTracks(base);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tracks, query, sort]);
+
+  async function createPlaylistWithName(name: string): Promise<MusicPlaylist> {
+    const p: MusicPlaylist = { id: `m:${Date.now()}`, name, trackIds: [] };
+    const next = [...manual, p];
+    setManual(next);
+    await saveMusicPlaylists(next);
+    return p;
+  }
+
+  async function addTracksToPlaylist(plId: string, trackIds: string[]) {
+    const next = manual.map((p) => {
+      if (p.id !== plId) return p;
+      const set = new Set(p.trackIds);
+      for (const id of trackIds) set.add(id);
+      return { ...p, trackIds: Array.from(set) };
+    });
+    setManual(next);
+    await saveMusicPlaylists(next);
+  }
+
+  async function removeTrackFromPlaylist(plId: string, trackId: string) {
+    const next = manual.map((p) =>
+      p.id === plId ? { ...p, trackIds: p.trackIds.filter((id) => id !== trackId) } : p,
+    );
+    setManual(next);
+    await saveMusicPlaylists(next);
+  }
+
   function tracksOfManual(p: MusicPlaylist): LibTrack[] {
     const byId = new Map(tracks.map((t) => [t.id, t]));
     return p.trackIds.map((id) => byId.get(id)).filter((t): t is LibTrack => !!t);
@@ -417,7 +468,7 @@ export default function MusicLibrary() {
     <div className="p-8 overflow-y-auto h-full">
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <h1 className="text-3xl font-bold">Моя музыка</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -427,12 +478,12 @@ export default function MusicLibrary() {
           {supportsFileSystemAccess() && (
             <button
               onClick={pickFolder}
-              className="glass hover:bg-white/10 transition-all text-sm px-5 py-2 rounded-full"
+              className="glass-button"
             >
               Добавить папку
             </button>
           )}
-          <label className="glass hover:bg-white/10 transition-all text-sm px-5 py-2 rounded-full cursor-pointer">
+          <label className="glass-button cursor-pointer">
             Добавить ZIP
             <input
               type="file"
@@ -447,7 +498,7 @@ export default function MusicLibrary() {
           </label>
           <button
             onClick={pickFiles}
-            className="bg-accent hover:bg-accentHover transition-colors text-black text-sm font-semibold px-5 py-2 rounded-full shadow-lg shadow-accent/20"
+            className="primary-button"
           >
             Добавить файлы
           </button>
@@ -455,20 +506,28 @@ export default function MusicLibrary() {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-6 border-b border-white/10 mb-6">
-        {(['tracks', 'playlists'] as const).map((k) => (
-          <button
-            key={k}
-            onClick={() => setView({ kind: k })}
-            className={`pb-2 text-sm font-semibold transition-colors ${
-              view.kind === k
-                ? 'text-white border-b-2 border-accent'
-                : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            {k === 'tracks' ? 'Треки' : 'Плейлисты'}
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-6 border-b border-white/10 mb-6 flex-wrap">
+        <div className="flex items-center gap-6">
+          {(['tracks', 'playlists'] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => setView({ kind: k })}
+              className={`pb-2 text-sm font-semibold transition-colors ${
+                view.kind === k
+                  ? 'text-white border-b-2 border-accent'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              {k === 'tracks' ? 'Треки' : 'Плейлисты'}
+            </button>
+          ))}
+        </div>
+        {view.kind === 'tracks' && (
+          <div className="flex items-center gap-2 pb-2">
+            <SortDropdown sort={sort} onChange={setSort} />
+            <ViewToggle mode={viewMode} onChange={setViewMode} />
+          </div>
+        )}
       </div>
 
       {loading && <div className="text-neutral-400">Загрузка библиотеки…</div>}
@@ -480,57 +539,109 @@ export default function MusicLibrary() {
       )}
 
       {view.kind === 'tracks' && tracks.length > 0 && (
-        <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(170px,1fr))]">
-          {filteredTracks.map((t) => {
-            const active = current?.kind === 'music' && current.track.id === t.id;
-            return (
-              <div
-                key={t.id}
-                className="group relative glass-card p-3 rounded-xl"
-              >
-                <button
-                  onClick={() => playMusic(t, filteredTracks, filteredTracks.indexOf(t))}
-                  className="w-full text-left"
+        viewMode === 'grid' ? (
+          <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(170px,1fr))]">
+            {filteredTracks.map((t) => {
+              const active = current?.kind === 'music' && current.track.id === t.id;
+              return (
+                <div
+                  key={t.id}
+                  className="group relative glass-card p-3 rounded-xl"
                 >
-                  <div className="aspect-square bg-surface2 rounded-md overflow-hidden mb-3 flex items-center justify-center text-neutral-500 relative">
-                    {t.artwork ? (
-                      <img src={t.artwork} alt="" className="w-full h-full object-cover" />
-                    ) : (
-                      <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z" />
-                      </svg>
-                    )}
-                    {active && (
-                      <div className="absolute bottom-2 right-2 bg-accent text-black rounded-full w-8 h-8 flex items-center justify-center">
-                        <EqualizerAnimation playing={isPlaying} />
-                      </div>
-                    )}
+                  <button
+                    onClick={() => playMusic(t, filteredTracks, filteredTracks.indexOf(t))}
+                    className="w-full text-left"
+                  >
+                    <div className="aspect-square bg-white/[0.04] rounded-md overflow-hidden mb-3 flex items-center justify-center text-neutral-500 relative">
+                      {t.artwork ? (
+                        <img src={t.artwork} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z" />
+                        </svg>
+                      )}
+                      {active && (
+                        <div className="absolute bottom-2 right-2 bg-accent text-black rounded-full w-8 h-8 flex items-center justify-center">
+                          <EqualizerAnimation playing={isPlaying} />
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-sm font-semibold truncate">{t.title}</div>
+                    <div className="text-xs text-neutral-400 truncate">{t.artist ?? t.album ?? ''}</div>
+                  </button>
+                  <button
+                    onClick={() => setPickForTrack(t)}
+                    className="track-action top-2 right-11"
+                    aria-label="Добавить в плейлист"
+                    title="Добавить в плейлист"
+                  >
+                    +
+                  </button>
+                  <button
+                    onClick={() => setPendingDelete({ kind: 'track', track: t })}
+                    className="track-action top-2 right-2 hover:text-red-300"
+                    aria-label="Удалить трек"
+                    title="Убрать из библиотеки"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M7 21a2 2 0 0 1-2-2V7h14v12a2 2 0 0 1-2 2H7zM9 9v8h2V9H9zm4 0v8h2V9h-2zm1.5-5-1-1h-3l-1 1H6v2h12V4h-3.5z" />
+                    </svg>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <ul className="glass rounded-2xl overflow-hidden divide-y divide-white/[0.04]">
+            {filteredTracks.map((t, i) => {
+              const active = current?.kind === 'music' && current.track.id === t.id;
+              return (
+                <li
+                  key={t.id}
+                  className={`group flex items-center gap-3 px-4 py-2 transition-colors ${
+                    active ? 'bg-white/[0.06]' : 'hover:bg-white/[0.04]'
+                  }`}
+                >
+                  <div className="w-6 text-neutral-500 text-sm text-right shrink-0 tabular-nums">
+                    {active ? <EqualizerAnimation playing={isPlaying} className="text-accent" /> : i + 1}
                   </div>
-                  <div className="text-sm font-semibold truncate">{t.title}</div>
-                  <div className="text-xs text-neutral-400 truncate">{t.artist ?? t.album ?? ''}</div>
-                </button>
-                <button
-                  onClick={() => setPickForTrack(t)}
-                  className="track-action top-2 right-11"
-                  aria-label="Добавить в плейлист"
-                  title="Добавить в плейлист"
-                >
-                  +
-                </button>
-                <button
-                  onClick={() => removeTrackFromLibrary(t)}
-                  className="track-action top-2 right-2 hover:text-red-300"
-                  aria-label="Удалить трек"
-                  title="Убрать из библиотеки"
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M7 21a2 2 0 0 1-2-2V7h14v12a2 2 0 0 1-2 2H7zM9 9v8h2V9H9zm4 0v8h2V9h-2zm1.5-5-1-1h-3l-1 1H6v2h12V4h-3.5z" />
-                  </svg>
-                </button>
-              </div>
-            );
-          })}
-        </div>
+                  <button
+                    onClick={() => playMusic(t, filteredTracks, filteredTracks.indexOf(t))}
+                    className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                  >
+                    <div className="w-10 h-10 rounded bg-white/5 overflow-hidden shrink-0 flex items-center justify-center text-neutral-500">
+                      {t.artwork ? (
+                        <img src={t.artwork} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z" />
+                        </svg>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className={`text-sm truncate ${active ? 'text-accent' : ''}`}>{t.title}</div>
+                      <div className="text-xs text-neutral-400 truncate">{t.artist ?? t.album ?? ''}</div>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setPickForTrack(t)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity text-neutral-400 hover:text-white text-sm px-2"
+                    title="Добавить в плейлист"
+                  >
+                    +
+                  </button>
+                  <button
+                    onClick={() => setPendingDelete({ kind: 'track', track: t })}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity text-neutral-500 hover:text-red-400 text-sm px-2"
+                    title="Убрать из библиотеки"
+                  >
+                    ✕
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )
       )}
 
       {view.kind === 'playlists' && (
@@ -538,7 +649,7 @@ export default function MusicLibrary() {
           <div className="mb-4">
             <button
               onClick={() => setCreatingPlaylist({})}
-              className="glass hover:bg-white/10 transition-all text-sm px-5 py-2 rounded-full"
+              className="glass-button"
             >
               + Создать плейлист
             </button>
@@ -558,7 +669,16 @@ export default function MusicLibrary() {
                 badge={p.zipId ? 'ZIP' : 'Папка'}
                 cover={p.tracks.find((t) => t.artwork)?.artwork}
                 onOpen={() => setView({ kind: 'playlist', id: p.id, auto: true })}
-                onDelete={p.zipId ? () => removeZip(p.zipId!) : undefined}
+                onDelete={
+                  p.zipId
+                    ? () =>
+                        setPendingDelete({
+                          kind: 'zip',
+                          id: p.zipId!,
+                          name: p.name,
+                        })
+                    : undefined
+                }
               />
             ))}
             {manual.map((p) => {
@@ -571,7 +691,7 @@ export default function MusicLibrary() {
                   badge="Свой"
                   cover={ts.find((t) => t.artwork)?.artwork}
                   onOpen={() => setView({ kind: 'playlist', id: p.id, auto: false })}
-                  onDelete={() => removeManualPlaylist(p.id)}
+                  onDelete={() => setPendingDelete({ kind: 'playlist', id: p.id, name: p.name })}
                 />
               );
             })}
@@ -609,6 +729,113 @@ export default function MusicLibrary() {
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={
+          pendingDelete?.kind === 'track'
+            ? 'Убрать трек из библиотеки?'
+            : pendingDelete?.kind === 'playlist'
+              ? 'Удалить плейлист?'
+              : 'Удалить ZIP-плейлист?'
+        }
+        message={
+          pendingDelete?.kind === 'track' ? (
+            <>
+              <span className="text-white font-semibold">«{pendingDelete.track.title}»</span>{' '}
+              исчезнет из Aurora. Исходный файл на диске останется.
+            </>
+          ) : pendingDelete?.kind === 'playlist' ? (
+            <>
+              Удалить плейлист{' '}
+              <span className="text-white font-semibold">«{pendingDelete.name}»</span>? Треки
+              останутся в библиотеке.
+            </>
+          ) : pendingDelete?.kind === 'zip' ? (
+            <>
+              ZIP-архив{' '}
+              <span className="text-white font-semibold">«{pendingDelete.name}»</span> и его треки
+              исчезнут из библиотеки.
+            </>
+          ) : undefined
+        }
+        confirmLabel={pendingDelete?.kind === 'track' ? 'Убрать' : 'Удалить'}
+        onConfirm={confirmPending}
+        onClose={() => setPendingDelete(null)}
+      />
+    </div>
+  );
+}
+
+function SortDropdown({ sort, onChange }: { sort: SortKey; onChange: (s: SortKey) => void }) {
+  const labels: Record<SortKey, string> = {
+    recent: 'Недавно добавленные',
+    'name-asc': 'По имени (А-Я)',
+    'name-desc': 'По имени (Я-А)',
+    artist: 'По исполнителю',
+  };
+  return (
+    <div className="relative">
+      <select
+        value={sort}
+        onChange={(e) => onChange(e.target.value as SortKey)}
+        className="glass-input rounded-full text-xs font-semibold pl-8 pr-8 py-1.5 cursor-pointer appearance-none text-white/85 hover:text-white"
+      >
+        {(Object.keys(labels) as SortKey[]).map((k) => (
+          <option key={k} value={k} className="bg-neutral-900 text-white">
+            {labels[k]}
+          </option>
+        ))}
+      </select>
+      <svg
+        className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/55 pointer-events-none"
+        width="13"
+        height="13"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+      >
+        <path d="M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z" />
+      </svg>
+      <svg
+        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/55 pointer-events-none"
+        width="11"
+        height="11"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+      >
+        <path d="M7 10l5 5 5-5H7z" />
+      </svg>
+    </div>
+  );
+}
+
+function ViewToggle({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode) => void }) {
+  return (
+    <div className="glass rounded-full p-0.5 flex items-center gap-0.5">
+      <button
+        onClick={() => onChange('grid')}
+        className={`p-1.5 rounded-full transition-colors ${
+          mode === 'grid' ? 'bg-white text-black' : 'text-white/55 hover:text-white'
+        }`}
+        title="Сеткой"
+        aria-label="Сеткой"
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M4 11h6V4H4v7zm0 9h6v-7H4v7zm9 0h6v-7h-6v7zm0-16v7h6V4h-6z" />
+        </svg>
+      </button>
+      <button
+        onClick={() => onChange('list')}
+        className={`p-1.5 rounded-full transition-colors ${
+          mode === 'list' ? 'bg-white text-black' : 'text-white/55 hover:text-white'
+        }`}
+        title="Списком"
+        aria-label="Списком"
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zm0-10v2h14V7H7z" />
+        </svg>
+      </button>
     </div>
   );
 }
@@ -648,9 +875,12 @@ function PlaylistCard({
       {onDelete && (
         <button
           onClick={onDelete}
-          className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 hover:bg-black/80 text-neutral-200 rounded-full w-7 h-7 flex items-center justify-center text-xs"
+          className="track-action top-2 right-2 hover:text-red-300"
+          aria-label="Удалить"
         >
-          ✕
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M7 21a2 2 0 0 1-2-2V7h14v12a2 2 0 0 1-2 2H7zM9 9v8h2V9H9zm4 0v8h2V9h-2zm1.5-5-1-1h-3l-1 1H6v2h12V4h-3.5z" />
+          </svg>
         </button>
       )}
     </div>
@@ -682,7 +912,7 @@ function PlaylistDetail({
       <div className="flex items-end gap-6 mb-8">
         <button
           onClick={onBack}
-          className="glass hover:bg-white/10 transition-all w-10 h-10 rounded-full flex items-center justify-center self-start mt-1"
+          className="glass-button-icon self-start mt-1"
           aria-label="Назад"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
@@ -708,7 +938,7 @@ function PlaylistDetail({
             {tracks.length > 0 && (
               <button
                 onClick={() => onPlay(tracks[0], tracks)}
-                className="bg-accent hover:bg-accentHover transition-colors text-black text-sm font-semibold px-5 py-2 rounded-full flex items-center gap-2"
+                className="primary-button flex items-center gap-2"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M8 5v14l11-7L8 5z" />
@@ -719,7 +949,7 @@ function PlaylistDetail({
             {onAddTracks && (
               <button
                 onClick={onAddTracks}
-                className="glass hover:bg-white/10 transition-all text-sm px-5 py-2 rounded-full"
+                className="glass-button"
               >
                 + Добавить треки
               </button>
@@ -801,9 +1031,9 @@ function AddToPlaylistModal({
 }) {
   return (
     <ModalBackdrop onClose={onClose}>
-      <div className="glass-strong rounded-2xl p-5 max-h-[80vh] flex flex-col">
+      <div className="liquid-panel rounded-3xl p-5 max-h-[80vh] flex flex-col">
         <div className="text-sm text-neutral-300 mb-3 truncate">
-          Добавить <span className="font-semibold">«{track.title}»</span> в:
+          Добавить <span className="font-semibold text-white">«{track.title}»</span> в:
         </div>
         <button
           onClick={onCreate}
@@ -853,7 +1083,7 @@ function CreatePlaylistModal({
 
   return (
     <ModalBackdrop onClose={onClose}>
-      <form onSubmit={submit} className="glass-strong rounded-2xl p-6">
+      <form onSubmit={submit} className="liquid-panel rounded-3xl p-6">
         <h2 className="text-xl font-bold mb-1">Новый плейлист</h2>
         <div className="text-xs text-neutral-400 mb-4">Дайте плейлисту название</div>
         <input
@@ -871,14 +1101,14 @@ function CreatePlaylistModal({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-sm text-neutral-300 hover:text-white transition-colors"
+            className="glass-button"
           >
             Отмена
           </button>
           <button
             type="submit"
             disabled={!trimmed || duplicate}
-            className="px-5 py-2 bg-accent hover:bg-accentHover disabled:bg-neutral-700 disabled:text-neutral-500 text-black text-sm font-semibold rounded-full transition-colors"
+            className="primary-button disabled:opacity-40"
           >
             Создать
           </button>
@@ -929,7 +1159,7 @@ function AddTracksModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="glass-strong rounded-2xl p-5 w-full max-w-2xl max-h-[80vh] flex flex-col"
+        className="liquid-panel rounded-3xl p-5 w-full max-w-2xl max-h-[80vh] flex flex-col"
       >
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-xl font-bold">Добавить треки в плейлист</h2>
@@ -985,14 +1215,14 @@ function AddTracksModal({
         <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-white/10">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm text-neutral-300 hover:text-white transition-colors"
+            className="glass-button"
           >
             Отмена
           </button>
           <button
             onClick={() => onAdd(Array.from(picked))}
             disabled={picked.size === 0}
-            className="px-5 py-2 bg-accent hover:bg-accentHover disabled:bg-neutral-700 disabled:text-neutral-500 text-black text-sm font-semibold rounded-full transition-colors"
+            className="primary-button disabled:opacity-40"
           >
             Добавить {picked.size > 0 && `(${picked.size})`}
           </button>

@@ -3,9 +3,11 @@ import {
   clearAudiobookStorage,
   clearMusicStorage,
   clearPlayerStorage,
+  clearVideoStorage,
   loadStorageSnapshot,
   type StorageSnapshot,
 } from '../../../lib/indexedDb';
+import ConfirmDialog from '../../ConfirmDialog';
 
 function bytes(value: number) {
   if (!value) return '0 Б';
@@ -14,8 +16,16 @@ function bytes(value: number) {
   return `${(value / 1024 ** index).toFixed(index > 1 ? 1 : 0)} ${units[index]}`;
 }
 
+type Pending = {
+  title: string;
+  message: React.ReactNode;
+  confirmLabel: string;
+  action: () => Promise<void>;
+};
+
 export default function Storage() {
   const [snapshot, setSnapshot] = useState<StorageSnapshot | null>(null);
+  const [pending, setPending] = useState<Pending | null>(null);
 
   async function refresh() {
     setSnapshot(await loadStorageSnapshot());
@@ -25,9 +35,11 @@ export default function Storage() {
     refresh();
   }, []);
 
-  async function run(action: () => Promise<void>, message: string) {
-    if (!confirm(message)) return;
-    await action();
+  async function runPending() {
+    if (!pending) return;
+    const fn = pending.action;
+    setPending(null);
+    await fn();
     await refresh();
     window.dispatchEvent(new Event('aurora-storage-changed'));
   }
@@ -60,7 +72,12 @@ export default function Storage() {
           ]}
           action="Очистить музыку"
           onAction={() =>
-            run(clearMusicStorage, 'Удалить музыку, ZIP, плейлисты и привязки к папкам из Aurora?')
+            setPending({
+              title: 'Очистить музыку?',
+              message: 'Удалит ZIP-архивы, плейлисты и привязки к папкам из Aurora. Исходные файлы на диске останутся.',
+              confirmLabel: 'Очистить',
+              action: clearMusicStorage,
+            })
           }
         />
         <StorageCard
@@ -73,7 +90,12 @@ export default function Storage() {
           ]}
           action="Очистить книги"
           onAction={() =>
-            run(clearAudiobookStorage, 'Удалить все аудиокниги из библиотеки Aurora?')
+            setPending({
+              title: 'Удалить все аудиокниги?',
+              message: 'Все книги исчезнут из библиотеки Aurora. Исходные файлы останутся на компьютере.',
+              confirmLabel: 'Удалить',
+              action: clearAudiobookStorage,
+            })
           }
         />
         <StorageCard
@@ -84,7 +106,17 @@ export default function Storage() {
             `${snapshot.iptvPlaylists} IPTV-плейлистов`,
             `${snapshot.stations} радиостанций`,
             `${snapshot.musicPlaylists} музыкальных плейлистов`,
+            `${snapshot.videos} видео`,
           ]}
+          action="Очистить видео"
+          onAction={() =>
+            setPending({
+              title: 'Удалить все видео?',
+              message: 'Удалит сохранённые видео из библиотеки Aurora. Исходные файлы останутся на компьютере.',
+              confirmLabel: 'Удалить',
+              action: clearVideoStorage,
+            })
+          }
         />
       </div>
 
@@ -99,12 +131,26 @@ export default function Storage() {
         <button
           className="danger-button shrink-0"
           onClick={() =>
-            run(clearPlayerStorage, 'Полностью очистить локальное хранилище Aurora?')
+            setPending({
+              title: 'Полный сброс Aurora?',
+              message: 'Удалит все локальные настройки и данные приложения. Это действие нельзя отменить.',
+              confirmLabel: 'Сбросить всё',
+              action: clearPlayerStorage,
+            })
           }
         >
           Сбросить всё
         </button>
       </section>
+
+      <ConfirmDialog
+        open={!!pending}
+        title={pending?.title ?? ''}
+        message={pending?.message}
+        confirmLabel={pending?.confirmLabel ?? 'Удалить'}
+        onConfirm={runPending}
+        onClose={() => setPending(null)}
+      />
     </div>
   );
 }

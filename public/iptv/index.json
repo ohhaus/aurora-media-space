@@ -1,0 +1,4 @@
+[
+  { "name": "IPTV (стабильные)", "file": "IPTVstable.m3u8" },
+  { "name": "IPTV RU", "file": "IPTVru.m3u" }
+]

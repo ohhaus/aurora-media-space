@@ -9,6 +9,7 @@ const K = {
   musicZips: 'music-zips',
   hiddenMusicTracks: 'hidden-music-tracks',
   books: 'audiobooks',
+  videos: 'videos',
 } as const;
 
 export async function loadStations() {
@@ -71,14 +72,56 @@ export async function saveHiddenMusicTracks(ids: string[]) {
 }
 
 export type StoredBook =
-  | { id: string; kind: 'folder'; title: string; dirHandle: FileSystemDirectoryHandle; addedAt: number }
-  | { id: string; kind: 'zip'; title: string; blob: Blob; fileName: string; addedAt: number };
+  | {
+      id: string;
+      kind: 'folder';
+      title: string;
+      dirHandle: FileSystemDirectoryHandle;
+      addedAt: number;
+      coverBlob?: Blob;
+    }
+  | {
+      id: string;
+      kind: 'zip';
+      title: string;
+      blob: Blob;
+      fileName: string;
+      addedAt: number;
+      coverBlob?: Blob;
+    };
 
 export async function loadBooks() {
   return ((await get(K.books)) as StoredBook[] | undefined) ?? [];
 }
 export async function saveBooks(list: StoredBook[]) {
   await set(K.books, list);
+}
+
+export type StoredVideo =
+  | {
+      id: string;
+      kind: 'handle';
+      title: string;
+      fileName: string;
+      handle: FileSystemFileHandle;
+      addedAt: number;
+      posterBlob?: Blob;
+    }
+  | {
+      id: string;
+      kind: 'blob';
+      title: string;
+      fileName: string;
+      blob: Blob;
+      addedAt: number;
+      posterBlob?: Blob;
+    };
+
+export async function loadVideos() {
+  return ((await get(K.videos)) as StoredVideo[] | undefined) ?? [];
+}
+export async function saveVideos(list: StoredVideo[]) {
+  await set(K.videos, list);
 }
 
 export type StorageSnapshot = {
@@ -93,10 +136,12 @@ export type StorageSnapshot = {
   musicPlaylists: number;
   audiobooks: number;
   audiobookBytes: number;
+  videos: number;
+  videoBytes: number;
 };
 
 export async function loadStorageSnapshot(): Promise<StorageSnapshot> {
-  const [stations, playlists, zips, files, dir, hidden, musicPlaylists, books] = await Promise.all([
+  const [stations, playlists, zips, files, dir, hidden, musicPlaylists, books, videos] = await Promise.all([
     loadStations(),
     loadPlaylists(),
     loadMusicZips(),
@@ -105,6 +150,7 @@ export async function loadStorageSnapshot(): Promise<StorageSnapshot> {
     loadHiddenMusicTracks(),
     loadMusicPlaylists(),
     loadBooks(),
+    loadVideos(),
   ]);
   return {
     stations: stations?.length ?? 0,
@@ -119,6 +165,11 @@ export async function loadStorageSnapshot(): Promise<StorageSnapshot> {
     audiobooks: books.length,
     audiobookBytes: books.reduce(
       (sum, book) => sum + (book.kind === 'zip' ? book.blob.size : 0),
+      0,
+    ),
+    videos: videos.length,
+    videoBytes: videos.reduce(
+      (sum, video) => sum + (video.kind === 'blob' ? video.blob.size : 0),
       0,
     ),
   };
@@ -138,12 +189,16 @@ export async function clearAudiobookStorage() {
   await del(K.books);
 }
 
+export async function clearVideoStorage() {
+  await del(K.videos);
+}
+
 export async function clearPlayerStorage() {
   await clear();
 }
 
 // Re-export types so consumers don't need to know storage details.
-export type Station = { id: string; name: string; streamUrl: string; iconUrl?: string };
+export type Station = { id: string; name: string; streamUrl: string; iconUrl?: string; iconBlob?: Blob };
 export type Channel = {
   id: string;
   name: string;
@@ -155,5 +210,5 @@ export type Playlist = {
   id: string;
   name: string;
   channels: Channel[];
-  source: { kind: 'url'; url: string } | { kind: 'file' };
+  source: { kind: 'url'; url: string } | { kind: 'file' } | { kind: 'bundled'; url: string };
 };

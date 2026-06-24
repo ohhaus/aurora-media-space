@@ -1,4 +1,4 @@
-export type Mode = 'music' | 'radio' | 'iptv' | 'audiobooks' | 'storage' | 'guide';
+export type Mode = 'music' | 'radio' | 'iptv' | 'videos' | 'audiobooks' | 'storage' | 'guide';
 
 type Props = { mode: Mode; onChange: (m: Mode) => void };
 
@@ -27,6 +27,15 @@ const ITEMS: { id: Exclude<Mode, 'guide'>; label: string; icon: JSX.Element }[] 
     icon: (
       <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
         <path d="M21 3H3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7v2H7v2h10v-2h-3v-2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 14H3V5h18v12z" />
+      </svg>
+    ),
+  },
+  {
+    id: 'videos',
+    label: 'Видео',
+    icon: (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z" />
       </svg>
     ),
   },

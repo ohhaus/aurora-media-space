@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import { parseBlob } from 'music-metadata';
-import { isAudioFilename, ensurePermission } from '../../../lib/fileSystem';
+import { isAudioFilename, isMacOsMetadataPath, ensurePermission } from '../../../lib/fileSystem';
 import type { StoredBook } from '../../../lib/indexedDb';
 
 export type BookChapter = {
@@ -46,6 +46,7 @@ export async function buildBookFromDir(stored: Extract<StoredBook, { kind: 'fold
   // @ts-ignore — entries() exists at runtime
   for await (const [name, entry] of (dir as any).entries()) {
     if (entry.kind !== 'file') continue;
+    if (isMacOsMetadataPath(name)) continue;
     if (isAudioFilename(name)) audioHandles.push({ name, handle: entry });
     else if (COVER_RE.test(name)) coverHandle = entry;
     else if (IMG_RE.test(name) && !fallbackImg) fallbackImg = entry;
@@ -54,6 +55,9 @@ export async function buildBookFromDir(stored: Extract<StoredBook, { kind: 'fold
   audioHandles.sort((a, b) => natCmp(a.name, b.name));
 
   let cover: string | undefined;
+  if (stored.coverBlob) {
+    cover = URL.createObjectURL(stored.coverBlob);
+  } else {
   const pickedCover = coverHandle ?? fallbackImg;
   if (pickedCover) {
     cover = URL.createObjectURL(await pickedCover.getFile());
@@ -67,6 +71,7 @@ export async function buildBookFromDir(stored: Extract<StoredBook, { kind: 'fold
     } catch {
       /* ignore */
     }
+  }
   }
 
   const chapters: BookChapter[] = audioHandles.map((af, i) => ({
@@ -92,6 +97,7 @@ export async function buildBookFromZip(stored: Extract<StoredBook, { kind: 'zip'
 
   for (const entry of Object.values(zip.files)) {
     if (entry.dir) continue;
+    if (isMacOsMetadataPath(entry.name)) continue;
     const base = basename(entry.name);
     if (isAudioFilename(base)) audioEntries.push(entry);
     else if (COVER_RE.test(base)) coverEntry = entry;
@@ -101,6 +107,9 @@ export async function buildBookFromZip(stored: Extract<StoredBook, { kind: 'zip'
   audioEntries.sort((a, b) => natCmp(a.name, b.name));
 
   let cover: string | undefined;
+  if (stored.coverBlob) {
+    cover = URL.createObjectURL(stored.coverBlob);
+  } else {
   const pickedCover = coverEntry ?? fallbackImg;
   if (pickedCover) {
     const b = await pickedCover.async('blob');
@@ -114,6 +123,7 @@ export async function buildBookFromZip(stored: Extract<StoredBook, { kind: 'zip'
     } catch {
       /* ignore */
     }
+  }
   }
 
   const chapters: BookChapter[] = audioEntries.map((entry, i) => ({

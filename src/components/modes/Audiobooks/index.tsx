@@ -4,6 +4,7 @@ import { supportsFileSystemAccess } from '../../../lib/fileSystem';
 import { buildBook, type Book } from './lib';
 import BookPage from './BookPage';
 import { usePlayer } from '../../../store/playerStore';
+import ConfirmDialog from '../../ConfirmDialog';
 
 export default function Audiobooks() {
   const [stored, setStored] = useState<StoredBook[]>([]);
@@ -11,6 +12,8 @@ export default function Audiobooks() {
   const [loading, setLoading] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<StoredBook | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<StoredBook | null>(null);
   const removeTrackFromPlayer = usePlayer((state) => state.removeTrack);
 
   useEffect(() => {
@@ -81,12 +84,28 @@ export default function Audiobooks() {
     setAdding(false);
   }
 
-  async function removeBook(id: string) {
-    if (!confirm('Удалить эту книгу из библиотеки?')) return;
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    const id = pendingDelete.id;
+    setPendingDelete(null);
     const book = books.find((item) => item.id === id);
     book?.chapters.forEach((chapter) => removeTrackFromPlayer(chapter.id));
     await persist(stored.filter((s) => s.id !== id));
     if (openId === id) setOpenId(null);
+  }
+
+  async function saveEdit(updates: { title: string; coverBlob?: Blob | null }) {
+    if (!editing) return;
+    const id = editing.id;
+    const next = stored.map((s) => {
+      if (s.id !== id) return s;
+      const patched = { ...s, title: updates.title } as StoredBook;
+      if (updates.coverBlob === null) delete (patched as any).coverBlob;
+      else if (updates.coverBlob) (patched as any).coverBlob = updates.coverBlob;
+      return patched;
+    });
+    setEditing(null);
+    await persist(next);
   }
 
   const openBook = books.find((b) => b.id === openId);
@@ -107,7 +126,7 @@ export default function Audiobooks() {
         </div>
         <button
           onClick={() => setAdding(true)}
-          className="bg-accent hover:bg-accentHover text-black text-sm font-semibold px-5 py-2.5 rounded-full shadow-lg shadow-accent/30 transition-colors flex items-center gap-2"
+          className="primary-button flex items-center gap-2"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
@@ -123,32 +142,48 @@ export default function Audiobooks() {
       )}
 
       <div className="grid gap-6 grid-cols-[repeat(auto-fill,minmax(200px,1fr))]">
-        {books.map((b) => (
-          <div key={b.id} className="group relative glass-card rounded-2xl p-4">
-            <button onClick={() => setOpenId(b.id)} className="w-full text-left">
-              <div className="aspect-[3/4] rounded-xl overflow-hidden mb-3 bg-gradient-to-br from-white/15 to-white/[0.03] flex items-center justify-center text-neutral-400 shadow-md shadow-black/40">
-                {b.cover ? (
-                  <img src={b.cover} alt="" className="w-full h-full object-cover" />
-                ) : (
-                  <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M18 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM8 4h2v10l-1-.75L8 14V4zm10 16H6v-1h12v1zm0-3H6V4h2v14l3-2.25L14 18V4h4v13z" />
+        {books.map((b) => {
+          const s = stored.find((it) => it.id === b.id);
+          return (
+            <div key={b.id} className="group relative glass-card rounded-2xl p-4">
+              <button onClick={() => setOpenId(b.id)} className="w-full text-left">
+                <div className="aspect-[3/4] rounded-xl overflow-hidden mb-3 bg-gradient-to-br from-white/15 to-white/[0.03] flex items-center justify-center text-neutral-400 shadow-md shadow-black/40">
+                  {b.cover ? (
+                    <img src={b.cover} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M18 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM8 4h2v10l-1-.75L8 14V4zm10 16H6v-1h12v1zm0-3H6V4h2v14l3-2.25L14 18V4h4v13z" />
+                    </svg>
+                  )}
+                </div>
+                <div className="text-sm font-semibold truncate">{b.title}</div>
+                <div className="text-xs text-neutral-400">{b.chapters.length} глав</div>
+              </button>
+              {s && (
+                <button
+                  onClick={() => setEditing(s)}
+                  className="track-action top-2 right-11"
+                  aria-label="Изменить"
+                  title="Изменить"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
                   </svg>
-                )}
-              </div>
-              <div className="text-sm font-semibold truncate">{b.title}</div>
-              <div className="text-xs text-neutral-400">{b.chapters.length} глав</div>
-            </button>
-            <button
-              onClick={() => removeBook(b.id)}
-              className="track-action top-2 right-2"
-              aria-label="Удалить"
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M7 21a2 2 0 0 1-2-2V7h14v12a2 2 0 0 1-2 2H7zM9 9v8h2V9H9zm4 0v8h2V9h-2zm1.5-5-1-1h-3l-1 1H6v2h12V4h-3.5z" />
-              </svg>
-            </button>
-          </div>
-        ))}
+                </button>
+              )}
+              <button
+                onClick={() => s && setPendingDelete(s)}
+                className="track-action top-2 right-2 hover:text-red-300"
+                aria-label="Удалить"
+                title="Удалить"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M7 21a2 2 0 0 1-2-2V7h14v12a2 2 0 0 1-2 2H7zM9 9v8h2V9H9zm4 0v8h2V9h-2zm1.5-5-1-1h-3l-1 1H6v2h12V4h-3.5z" />
+                </svg>
+              </button>
+            </div>
+          );
+        })}
       </div>
 
       {adding && (
@@ -158,6 +193,150 @@ export default function Audiobooks() {
           onPickZip={addFromZip}
         />
       )}
+
+      {editing && (
+        <EditBookModal
+          stored={editing}
+          onClose={() => setEditing(null)}
+          onSave={saveEdit}
+        />
+      )}
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title="Удалить книгу?"
+        message={
+          pendingDelete && (
+            <>
+              <span className="text-white font-semibold">«{pendingDelete.title}»</span>{' '}
+              исчезнет из библиотеки Aurora. Исходные файлы на диске останутся.
+            </>
+          )
+        }
+        confirmLabel="Удалить"
+        onConfirm={confirmDelete}
+        onClose={() => setPendingDelete(null)}
+      />
+    </div>
+  );
+}
+
+function EditBookModal({
+  stored,
+  onClose,
+  onSave,
+}: {
+  stored: StoredBook;
+  onClose: () => void;
+  onSave: (updates: { title: string; coverBlob?: Blob | null }) => void;
+}) {
+  const [title, setTitle] = useState(stored.title);
+  const [coverBlob, setCoverBlob] = useState<Blob | undefined>(stored.coverBlob);
+  const [coverPreview, setCoverPreview] = useState<string | undefined>(() =>
+    stored.coverBlob ? URL.createObjectURL(stored.coverBlob) : undefined,
+  );
+  const [coverChanged, setCoverChanged] = useState(false);
+  const [coverCleared, setCoverCleared] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (coverPreview && coverChanged) URL.revokeObjectURL(coverPreview);
+    };
+  }, [coverPreview, coverChanged]);
+
+  function pickFile(file: File) {
+    if (coverPreview && coverChanged) URL.revokeObjectURL(coverPreview);
+    const url = URL.createObjectURL(file);
+    setCoverBlob(file);
+    setCoverPreview(url);
+    setCoverChanged(true);
+    setCoverCleared(false);
+  }
+
+  function clearCover() {
+    if (coverPreview && coverChanged) URL.revokeObjectURL(coverPreview);
+    setCoverBlob(undefined);
+    setCoverPreview(undefined);
+    setCoverChanged(false);
+    setCoverCleared(true);
+  }
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = title.trim() || stored.title;
+    onSave({
+      title: trimmed,
+      coverBlob: coverChanged ? coverBlob : coverCleared ? null : undefined,
+    });
+  }
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-40 p-4"
+      onClick={onClose}
+    >
+      <form
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={submit}
+        className="liquid-panel rounded-3xl p-6 w-full max-w-md"
+      >
+        <h2 className="text-xl font-bold mb-4">Изменить книгу</h2>
+        <div className="flex gap-4 mb-4">
+          <label className="w-24 h-32 rounded-xl overflow-hidden bg-white/[0.04] border border-white/10 flex items-center justify-center text-neutral-500 cursor-pointer shrink-0 relative group">
+            {coverPreview ? (
+              <img src={coverPreview} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5z" />
+              </svg>
+            )}
+            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs">
+              Изменить
+            </div>
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) pickFile(f);
+              }}
+            />
+          </label>
+          <div className="flex-1">
+            <label className="block">
+              <div className="text-xs text-neutral-400 mb-1">Название</div>
+              <input
+                autoFocus
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className="glass-input w-full px-3 py-2 rounded-xl text-sm"
+              />
+            </label>
+            {coverPreview && (
+              <button
+                type="button"
+                onClick={clearCover}
+                className="text-xs text-white/50 hover:text-red-300 mt-3"
+              >
+                Сбросить обложку
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="glass-button"
+          >
+            Отмена
+          </button>
+          <button type="submit" className="primary-button">
+            Сохранить
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -176,7 +355,7 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
       </p>
       <button
         onClick={onAdd}
-        className="bg-accent hover:bg-accentHover text-black text-sm font-semibold px-6 py-2.5 rounded-full"
+        className="primary-button"
       >
         Добавить первую книгу
       </button>
@@ -200,7 +379,7 @@ function AddBookModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="glass-strong rounded-2xl p-6 w-full max-w-md"
+        className="liquid-panel rounded-3xl p-6 w-full max-w-md"
       >
         <h2 className="text-xl font-bold mb-1">Добавить книгу</h2>
         <div className="text-xs text-neutral-400 mb-5">
@@ -210,7 +389,7 @@ function AddBookModal({
           {supportsFileSystemAccess() && (
             <button
               onClick={onPickFolder}
-              className="glass hover:bg-white/10 transition-all rounded-2xl p-5 text-center"
+              className="glass-card hover:bg-white/10 transition-all rounded-2xl p-5 text-center"
             >
               <div className="w-12 h-12 mx-auto mb-2 rounded-full bg-accent/15 flex items-center justify-center text-accent">
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
@@ -221,7 +400,7 @@ function AddBookModal({
               <div className="text-xs text-neutral-400 mt-1">с mp3-главами</div>
             </button>
           )}
-          <label className="glass hover:bg-white/10 transition-all rounded-2xl p-5 text-center cursor-pointer">
+          <label className="glass-card hover:bg-white/10 transition-all rounded-2xl p-5 text-center cursor-pointer">
             <div className="w-12 h-12 mx-auto mb-2 rounded-full bg-accent/15 flex items-center justify-center text-accent">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M20 6h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm-7 5h2v3h2l-3 3-3-3h2v-3z" />

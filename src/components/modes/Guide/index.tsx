@@ -12,16 +12,16 @@ export default function Guide({ onNavigate }: Props) {
             Как пользоваться
           </h1>
           <p className="text-neutral-300 mt-3 max-w-2xl leading-relaxed">
-            Плеер объединяет четыре независимых режима: локальную музыку, интернет-радио,
-            IPTV-каналы и аудиокниги. Всё хранится локально в вашем браузере — ничего никуда не
-            уходит.
+            Плеер объединяет пять независимых режимов: локальную музыку, интернет-радио,
+            IPTV-каналы, видео и аудиокниги. Всё хранится локально в вашем браузере — ничего
+            никуда не уходит.
           </p>
         </header>
 
         {/* Overview cards */}
         <section className="mb-12">
           <h2 className="text-xs uppercase tracking-wider text-neutral-400 mb-3">Разделы</h2>
-          <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+          <div className="grid gap-3 grid-cols-2 sm:grid-cols-5">
             <ModeCard
               label="Музыка"
               onClick={() => onNavigate('music')}
@@ -41,6 +41,13 @@ export default function Guide({ onNavigate }: Props) {
               onClick={() => onNavigate('iptv')}
               icon={
                 <path d="M21 3H3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7v2H7v2h10v-2h-3v-2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 14H3V5h18v12z" />
+              }
+            />
+            <ModeCard
+              label="Видео"
+              onClick={() => onNavigate('videos')}
+              icon={
+                <path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z" />
               }
             />
             <ModeCard
@@ -92,10 +99,29 @@ export default function Guide({ onNavigate }: Props) {
               Открывается окно выбора плейлиста для этого трека.
             </Bullet>
           </Subsection>
+          <Subsection title="Сортировка и вид">
+            <Bullet>
+              На вкладке «Треки» в правом верхнем углу — выпадающий список сортировки:{' '}
+              <strong>Недавно добавленные</strong>, <strong>По имени (А-Я / Я-А)</strong>,{' '}
+              <strong>По исполнителю</strong>. «Недавно» считается по{' '}
+              <code className="text-accent">lastModified</code> файла, либо по дате добавления ZIP-архива.
+            </Bullet>
+            <Bullet>
+              Рядом — переключатель <strong>сетка ↔ список</strong>. Списковый вид построен как
+              в детали плейлиста и удобен для длинных библиотек.
+            </Bullet>
+          </Subsection>
           <Subsection title="Случайное воспроизведение">
             <Bullet>
               Левая иконка <Kbd>↕</Kbd> в Player Bar включает shuffle. При включённом перемешивании
               «Следующий трек» выберется случайно из текущей очереди.
+            </Bullet>
+          </Subsection>
+          <Subsection title="Удаление">
+            <Bullet>
+              Любое удаление трека, ZIP-плейлиста или ручного плейлиста открывает кастомную
+              модалку подтверждения в стиле Aurora — никаких системных <code className="text-accent">confirm()</code>.
+              Исходные файлы на диске не трогаются.
             </Bullet>
           </Subsection>
           <Tip>
@@ -110,7 +136,14 @@ export default function Guide({ onNavigate }: Props) {
             <Bullet>
               Нажмите <Kbd>+ Добавить радиостанцию</Kbd>. Введите название и URL потока (как
               правило, <code className="text-accent">.aacp</code>, <code className="text-accent">.aac</code> или{' '}
-              <code className="text-accent">.mp3</code>). При желании укажите иконку — публичный URL картинки.
+              <code className="text-accent">.mp3</code>). Иконку можно задать ссылкой или загрузить
+              как локальный файл — она сохранится прямо в IndexedDB и переживёт перезапуск.
+            </Bullet>
+          </Subsection>
+          <Subsection title="Редактирование и удаление">
+            <Bullet>
+              На карточке станции наведите курсор — появятся <strong>карандаш</strong> (редактирование
+              названия, URL потока и иконки) и <strong>корзина</strong> с кастомным окном подтверждения.
             </Bullet>
           </Subsection>
           <Subsection title="Что важно знать про URL потока">
@@ -131,29 +164,46 @@ export default function Guide({ onNavigate }: Props) {
 
         {/* TV */}
         <Section title="ТВ (IPTV)" anchor="iptv">
-          <Subsection title="Добавление M3U-плейлиста">
+          <Subsection title="Плейлисты из public/iptv/">
             <Bullet>
-              <strong>Из файла</strong> — выберите <code className="text-accent">.m3u</code> или{' '}
-              <code className="text-accent">.m3u8</code>. Каналы автоматически сгруппируются по{' '}
-              <code className="text-accent">group-title</code>, логотипы возьмутся из{' '}
-              <code className="text-accent">tvg-logo</code>.
+              <Badge>Bundled</Badge> При каждом запуске Aurora перечитывает{' '}
+              <code className="text-accent">public/iptv/index.json</code> и парсит указанные в нём
+              файлы. Чтобы добавить свой плейлист, положите файл в эту папку и впишите его в
+              манифест:
             </Bullet>
             <Bullet>
-              <strong>По URL</strong> — вставьте прямую ссылку на плейлист. Сервер должен отдавать
+              <code className="text-accent">{`[{ "name": "Мой IPTV", "file": "my.m3u" }]`}</code>
+            </Bullet>
+            <Bullet>
+              Файлы читаются с <code className="text-accent">cache: 'no-store'</code> — обновили
+              файл, перезагрузили вкладку, новые каналы появились. Никаких сбросов IndexedDB.
+              Bundled-плейлисты не удаляются из UI (они приходят из репозитория).
+            </Bullet>
+          </Subsection>
+          <Subsection title="Временные плейлисты">
+            <Bullet>
+              <strong>Из файла</strong> — кнопка <Kbd>+ Добавить M3U</Kbd>, выберите{' '}
+              <code className="text-accent">.m3u</code> / <code className="text-accent">.m3u8</code>.
+            </Bullet>
+            <Bullet>
+              <strong>По URL</strong> — там же вставьте ссылку на плейлист. Сервер должен отдавать
               корректные CORS-заголовки.
+            </Bullet>
+            <Bullet>
+              Такие плейлисты сохраняются в IndexedDB и удаляются крестиком с подтверждением.
             </Bullet>
           </Subsection>
           <Subsection title="Просмотр канала">
             <Bullet>
-              Клик по каналу — открывается страница с большим плеером слева и списком всех каналов
-              справа (с поиском и фильтром по категории).
+              Клик по каналу — открывается страница: плеер слева, справа панель с поиском,{' '}
+              <strong>чип-рейлом категорий</strong> (с количеством каналов) и списком каналов.
             </Bullet>
             <Bullet>
-              В шапке: кнопки <Kbd>◀</Kbd>/<Kbd>▶</Kbd> для переключения каналов по порядку.
+              В шапке: <Kbd>◀</Kbd>/<Kbd>▶</Kbd> переключают каналы по порядку, счётчик показывает
+              N&nbsp;/&nbsp;M.
             </Bullet>
             <Bullet>
-              <Kbd>F</Kbd> — переключение полноэкранного режима. Работает только когда фокус не
-              находится в поле поиска.
+              <Kbd>F</Kbd> — переключение полноэкранного режима (игнорируется в полях ввода).
             </Bullet>
           </Subsection>
           <Subsection title="Поддерживаемые форматы">
@@ -170,6 +220,35 @@ export default function Guide({ onNavigate }: Props) {
           </Subsection>
         </Section>
 
+        {/* Videos */}
+        <Section title="Видео" anchor="videos">
+          <Subsection title="Добавление видео">
+            <Bullet>
+              <Kbd>+ Добавить видео</Kbd> — выбор одного или нескольких файлов. В Chrome / Edge /
+              Opera сохраняется handle файла на диске, в остальных браузерах — blob внутри
+              IndexedDB. Поддерживаются <code className="text-accent">mp4</code>,{' '}
+              <code className="text-accent">webm</code>, <code className="text-accent">mkv</code>,{' '}
+              <code className="text-accent">mov</code>, <code className="text-accent">m4v</code>,{' '}
+              <code className="text-accent">avi</code>, <code className="text-accent">ogv</code>.
+            </Bullet>
+          </Subsection>
+          <Subsection title="Редактирование и удаление">
+            <Bullet>
+              На карточке — карандаш (название + свой постер) и корзина с подтверждением.
+            </Bullet>
+          </Subsection>
+          <Subsection title="Воспроизведение">
+            <Bullet>
+              Используется тот же плеер, что в ТВ. Доступны фуллскрин по <Kbd>F</Kbd>, перемотка
+              ±5 секунд и регулировка громкости.
+            </Bullet>
+            <Bullet>
+              Декодинг идёт через нативные кодеки браузера — экзотические потоки в mkv / avi могут
+              не воспроизвестись.
+            </Bullet>
+          </Subsection>
+        </Section>
+
         {/* Audiobooks */}
         <Section title="Аудиокниги" anchor="audiobooks">
           <Subsection title="Как загрузить книгу">
@@ -182,6 +261,13 @@ export default function Guide({ onNavigate }: Props) {
               <Badge>ZIP</Badge> Архив <code className="text-accent">.zip</code>, внутри —
               mp3-файлы глав. Работает во всех браузерах. Архив целиком сохраняется в IndexedDB
               и распаковывается по запросу.
+            </Bullet>
+          </Subsection>
+          <Subsection title="Редактирование и удаление">
+            <Bullet>
+              На карточке книги — карандаш (название и обложка) и корзина (с подтверждением в
+              стиле Aurora). Своя обложка хранится в IndexedDB и имеет приоритет над{' '}
+              <code className="text-accent">cover.*</code> из источника.
             </Bullet>
           </Subsection>
           <Subsection title="Порядок глав">
@@ -208,9 +294,32 @@ export default function Guide({ onNavigate }: Props) {
             </Bullet>
           </Subsection>
           <Tip>
-            Нижний Player Bar в режиме аудиокниг и ТВ скрыт — используется встроенный плеер
-            на самой странице.
+            Нижний Player Bar в режимах аудиокниг, ТВ и Видео скрыт — используется встроенный
+            плеер на самой странице.
           </Tip>
+        </Section>
+
+        {/* Storage */}
+        <Section title="Хранилище и сброс" anchor="storage">
+          <Subsection title="Что лежит в IndexedDB">
+            <Bullet>
+              На вкладке «Хранилище» показан снимок: количество станций, IPTV-плейлистов,
+              музыкальных файлов и ZIP-архивов, аудиокниг и видео, а также суммарный объём.
+            </Bullet>
+          </Subsection>
+          <Subsection title="Частичный сброс">
+            <Bullet>
+              Каждая карточка имеет свою кнопку очистки: <strong>только музыка</strong>,{' '}
+              <strong>только аудиокниги</strong>, <strong>только видео</strong>. Перед сбросом —
+              кастомное окно подтверждения.
+            </Bullet>
+          </Subsection>
+          <Subsection title="Полный сброс">
+            <Bullet>
+              Кнопка <Kbd>Сбросить всё</Kbd> в конце страницы очищает <em>всё</em> в IndexedDB
+              Aurora. Исходные файлы на компьютере остаются.
+            </Bullet>
+          </Subsection>
         </Section>
 
         {/* Browser compatibility */}
@@ -228,6 +337,8 @@ export default function Guide({ onNavigate }: Props) {
             <CompatRow feature="MPEG-TS (.ts)" chrome="yes" firefox="yes" safari="partial" />
             <CompatRow feature="DASH (.mpd)" chrome="partial" firefox="no" safari="no" />
             <CompatRow feature="ZIP-архив книги" chrome="yes" firefox="yes" safari="yes" />
+            <CompatRow feature="Видео mp4 / webm" chrome="yes" firefox="yes" safari="yes" />
+            <CompatRow feature="Видео mkv / avi" chrome="partial" firefox="partial" safari="partial" note="зависит от кодеков" />
             <CompatRow feature="Полный экран (F)" chrome="yes" firefox="yes" safari="yes" />
           </div>
         </Section>
@@ -235,13 +346,18 @@ export default function Guide({ onNavigate }: Props) {
         {/* Privacy */}
         <Section title="Где хранятся данные" anchor="privacy">
           <Bullet>
-            Список радиостанций, M3U-плейлисты, ваши плейлисты музыки, file-handles библиотеки
-            и zip-архивы книг — всё в <strong>IndexedDB вашего браузера</strong>. Никакого
-            backend, никаких аккаунтов.
+            Список радиостанций (вместе с иконками-blob), ваши IPTV-плейлисты, плейлисты музыки,
+            file-handles библиотеки, ZIP-архивы книг и музыки, видео и их постеры, обложки книг —
+            всё в <strong>IndexedDB вашего браузера</strong>. Никакого backend, никаких аккаунтов.
           </Bullet>
           <Bullet>
-            Очистка данных сайта в браузере удалит всё. Резервного копирования между устройствами
-            нет — это локальное приложение.
+            Bundled IPTV-плейлисты (из <code className="text-accent">public/iptv/</code>) и
+            стартовый <code className="text-accent">radio.json</code> приходят из репозитория и
+            перечитываются при каждом запуске — в IndexedDB они не дублируются.
+          </Bullet>
+          <Bullet>
+            Очистка данных сайта в браузере (или «Сбросить всё» в Хранилище) удалит всё локальное.
+            Исходные файлы на диске не трогаются.
           </Bullet>
         </Section>
       </div>
