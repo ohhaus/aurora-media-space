@@ -15,7 +15,7 @@ function isValidUrl(u: string) {
 
 async function seedFromBundled(): Promise<Station[]> {
   try {
-    const res = await fetch('/radio.json');
+    const res = await fetch(`${import.meta.env.BASE_URL}radio.json`);
     const json = (await res.json()) as Record<string, string>;
     return Object.entries(json).map(([name, streamUrl], i) => ({
       id: `seed-${i}`,

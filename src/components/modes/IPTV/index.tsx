@@ -17,13 +17,14 @@ type BundledEntry = { name: string; file: string };
 
 async function loadBundledPlaylists(): Promise<Playlist[]> {
   try {
-    const res = await fetch('/iptv/index.json', { cache: 'no-store' });
+    const base = import.meta.env.BASE_URL;
+    const res = await fetch(`${base}iptv/index.json`, { cache: 'no-store' });
     if (!res.ok) return [];
     const entries = (await res.json()) as BundledEntry[];
     const out: Playlist[] = [];
     for (const e of entries) {
       try {
-        const url = `/iptv/${e.file}`;
+        const url = `${base}iptv/${e.file}`;
         const r = await fetch(url, { cache: 'no-store' });
         if (!r.ok) continue;
         const text = await r.text();
